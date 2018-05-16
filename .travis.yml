@@ -1,0 +1,7 @@
+language: ruby
+matrix:
+  include:
+    # macOS 10.13.4 (17E199)
+    - rvm: 2.3.3
+script:
+  - 'bundle exec rubocop -D'

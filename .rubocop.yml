@@ -1,0 +1,25 @@
+AllCops:
+  Include:
+    - '*.rb'
+    - 'lib/**/*.rb'
+    - 'spec/**/*.rb'
+
+Metrics/BlockLength:
+  Exclude:
+    - '*.rb'
+    - 'spec/**/*.rb'
+
+Metrics/MethodLength:
+  Exclude:
+    - '*.rb'
+    - 'spec/**/*.rb'
+
+Naming/FileName:
+  Exclude:
+    - Gemfile
+    - Rakefile
+
+Style/TrailingCommaInHashLiteral:
+  Enabled: false
+Metrics/AbcSize:
+  Enabled: false

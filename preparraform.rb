@@ -2,23 +2,27 @@
 require 'yaml'
 require 'terraform-enterprise-client'
 
-def load_yaml(yaml = './workspaces.yaml')
+# Read YAML file with workspaces
+def load_yaml(yaml)
   YAML.load_file(yaml)
 rescue StandardError
   raise %(Could not load '#{yaml}'.)
 end
 
+# Hit TFE API
 def tfe_call(endpoint, verb, *data)
+  puts %(#{endpoint}/#{verb}: #{data})
   res = @client.public_send(endpoint.to_sym).public_send(verb.to_sym, *data)
   raise StandardError, res.errors if res.errors?
-  puts %(#{endpoint}/#{verb}: #{data})
   res.body['data']
 end
 
+# Check workspace/variable cache to see if thing exists
 def obj_exists?(obj_name, type = 'workspace')
   case type
   when 'workspace'
     m = @ws_cache.select { |o| o['attributes']['name'] == obj_name }
+  # Have to check variable metadata for relation to workspace
   when 'variable'
     m = @var_cache.select do |o|
       o['attributes']['key'] == obj_name &&
@@ -44,21 +48,39 @@ def prefix(value)
   @user_prefix ? %(#{@user_prefix}_#{value}) : value
 end
 
+# Merge in workspace/org and oauth token from ENV variables
+def prepare_hash(workspace, hash)
+  k = @ws_id ? 'workspace' : 'name'
+  h = {
+    k.to_sym      => workspace,
+    :organization => @organization,
+  }.merge(hash)
+
+  if h.key?(:'vcs-repo') && @oauth_token
+    h[:'vcs-repo'][:'oauth-token-id'] = @oauth_token
+  end
+
+  h
+end
+
 token         = ENV['TFE_TOKEN']
 @organization = ENV['TFE_ORG']
 @oauth_token  = ENV['TFE_OAUTH_TOKEN']
 @user_prefix  = ENV['TFE_PREFIX']
 @client       = TerraformEnterprise::API::Client.new(token: token)
-@ws_cache     = tfe_call('workspaces', 'list', organization: @organization)
-@var_cache    = tfe_call('variables', 'list', organization: @organization)
-@ws           = load_yaml
+@ws           = load_yaml(ARGV[0] || './workspaces.yaml')
 @ws_id        = ''
 
+# Cache workspace/variable list if not deleting
+unless ENV['TFE_DELETE']
+  @ws_cache  = tfe_call('workspaces', 'list', organization: @organization)
+  @var_cache = tfe_call('variables', 'list', organization: @organization)
+end
+
 @ws.each do |workspace, configs|
+  # Minimum values necessary for delete
   prefix    = configs.delete(:prefix)
   workspace = prefix(workspace) if prefix
-  @ws_id    = obj_exists?(workspace)
-  variables = configs.delete(:variables)
 
   if ENV['TFE_DELETE']
     tfe_call(
@@ -70,26 +92,24 @@ token         = ENV['TFE_TOKEN']
     next
   end
 
+  # Other ops if not deleting
+  @ws_id    = obj_exists?(workspace)
+  variables = configs.delete(:variables)
+
+  # Create or update depending on if workspace exists
   if @ws_id
     tfe_call(
       'workspaces',
       'update',
-      {
-        workspace: workspace,
-        organization: @organization,
-        :'vcs-repo' => { :'oauth-token-id' => @oauth_token }
-      }.merge(configs)
+      prepare_hash(workspace, configs)
     )
   else
     tfe_call(
       'workspaces',
       'create',
-      {
-        name: workspace,
-        organization: @organization,
-        :'vcs-repo' => { :'oauth-token-id' => @oauth_token }
-      }.merge(configs)
+      prepare_hash(workspace, configs)
     )
+    # Set @ws_id after creating to relate variables
     @ws_id = tfe_call(
       'workspaces',
       'list',
@@ -98,10 +118,20 @@ token         = ENV['TFE_TOKEN']
     ).first['id']
   end
 
-  next if variables.empty?
+  next if variables.nil?
   variables_array = []
   variables.each do |var, data|
     variables_array <<
+      # Variables can be written as a Hash or String depending on
+      # if you want to use defaults
+      # Hash notation showing defaults:
+      # myvar:
+      #   value: something
+      #   sensitive: false
+      #   hcl: false
+      #   category: 'terraform'
+      # String notation
+      # myvar: something
       case data
       when Hash
         prefix = data.delete(:prefix)

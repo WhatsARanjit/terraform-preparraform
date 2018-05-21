@@ -1,12 +1,12 @@
 #!/usr/bin/env ruby
-require 'yaml'
+require 'rhcl'
 require 'terraform-enterprise-client'
 
 # Read YAML file with workspaces
-def load_yaml(yaml)
-  YAML.load_file(yaml)
+def load_hcl(hcl)
+  Rhcl.parse(File.read(hcl))
 rescue StandardError
-  raise %(Could not load '#{yaml}'.)
+  raise %(Could not load '#{hcl}'.)
 end
 
 # Hit TFE API
@@ -63,12 +63,38 @@ def prepare_hash(workspace, hash)
   h
 end
 
+# HCL file has no symbols
+# Ruby library requires symbols in payload
+def keys_to_sym(data, parent = false)
+  newhash = {}
+  if data.is_a?(Hash)
+    if parent
+      newhash = data.map do |k, v|
+        # Variable names should stay as strings
+        if parent == :variables
+          [k.to_s, v]
+        else
+          [k.to_sym, v]
+        end
+      end
+      newhash = newhash.to_h
+    else
+      newhash = data
+    end
+  end
+  newhash.each do |k, v|
+    newhash[k] = v.is_a?(Hash) ? keys_to_sym(v, k) : v
+  end
+  newhash
+end
+
 token         = ENV['TFE_TOKEN']
 @organization = ENV['TFE_ORG']
 @oauth_token  = ENV['TFE_OAUTH_TOKEN']
 @user_prefix  = ENV['TFE_PREFIX']
 @client       = TerraformEnterprise::API::Client.new(token: token)
-@ws           = load_yaml(ARGV[0] || './workspaces.yaml')
+ws_file       = ARGV[0] || './workspaces.hcl'
+@ws           = keys_to_sym(load_hcl(ws_file))
 @ws_id        = ''
 
 # Cache workspace/variable list if not deleting
